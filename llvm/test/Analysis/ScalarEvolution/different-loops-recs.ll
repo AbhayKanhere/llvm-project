@@ -818,7 +818,7 @@ define i64 @test_10(i32 %param) {
 ; CHECK-LABEL: 'test_10'
 ; CHECK-NEXT:  Classifying expressions for: @test_10
 ; CHECK-NEXT:    %uncle = phi i64 [ %uncle.outer.next, %uncle.loop.backedge ], [ 0, %outer.loop ]
-; CHECK-NEXT:    --> {0,+,1}<nuw><nsw><%uncle.loop> U: [0,1) S: [0,1) Exits: <<Unknown>> LoopDispositions: { %uncle.loop: Computable, %loop1: Invariant }
+; CHECK-NEXT:    --> {0,+,1}<nuw><nsw><%uncle.loop> U: [0,1) S: [0,1) Exits: 0 LoopDispositions: { %uncle.loop: Computable, %loop1: Invariant }
 ; CHECK-NEXT:    %iv1 = phi i64 [ %iv1.next, %guarded ], [ 0, %uncle.loop ]
 ; CHECK-NEXT:    --> {0,+,1}<nuw><nsw><%loop1> U: [0,3) S: [0,3) Exits: 2 LoopDispositions: { %loop1: Computable, %uncle.loop: Uniform }
 ; CHECK-NEXT:    %iv1.trunc = trunc i64 %iv1 to i32
@@ -826,7 +826,7 @@ define i64 @test_10(i32 %param) {
 ; CHECK-NEXT:    %iv1.next = add nuw nsw i64 %iv1, 1
 ; CHECK-NEXT:    --> {1,+,1}<nuw><nsw><%loop1> U: [1,4) S: [1,4) Exits: 3 LoopDispositions: { %loop1: Computable, %uncle.loop: Uniform }
 ; CHECK-NEXT:    %uncle.outer.next = add i64 %uncle, 1
-; CHECK-NEXT:    --> {1,+,1}<nuw><nsw><%uncle.loop> U: [1,2) S: [1,2) Exits: <<Unknown>> LoopDispositions: { %uncle.loop: Computable, %loop1: Invariant }
+; CHECK-NEXT:    --> {1,+,1}<nuw><nsw><%uncle.loop> U: [1,2) S: [1,2) Exits: 1 LoopDispositions: { %uncle.loop: Computable, %loop1: Invariant }
 ; CHECK-NEXT:    %iv2 = phi i32 [ %iv2.next, %loop2 ], [ %param, %loop2.preheader ]
 ; CHECK-NEXT:    --> {%param,+,1}<%loop2> U: full-set S: full-set Exits: (2 smax %param) LoopDispositions: { %loop2: Computable }
 ; CHECK-NEXT:    %iv2.next = add i32 %iv2, 1
@@ -848,13 +848,14 @@ define i64 @test_10(i32 %param) {
 ; CHECK-NEXT:    symbolic max exit count for loop1: i64 100
 ; CHECK-NEXT:    symbolic max exit count for guarded: i32 2
 ; CHECK-NEXT:  Loop %loop1: Trip multiple is 1
-; CHECK-NEXT:  Loop %uncle.loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %uncle.loop: <multiple exits> backedge-taken count is i64 0
 ; CHECK-NEXT:    exit count for loop1: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    exit count for uncle.loop.backedge: i64 0
 ; CHECK-NEXT:  Loop %uncle.loop: constant max backedge-taken count is i64 0
 ; CHECK-NEXT:  Loop %uncle.loop: symbolic max backedge-taken count is i64 0
 ; CHECK-NEXT:    symbolic max exit count for loop1: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    symbolic max exit count for uncle.loop.backedge: i64 0
+; CHECK-NEXT:  Loop %uncle.loop: Trip multiple is 1
 ;
 
 entry:

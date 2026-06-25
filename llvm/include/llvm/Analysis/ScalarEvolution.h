@@ -1047,7 +1047,7 @@ public:
   /// has executed before the loop is exited.
   enum ExitCountKind {
     /// An expression exactly describing the number of times the backedge has
-    /// executed when a loop is exited.
+    /// executed when a loop is exited normally (not aborted via `unreachable`).
     Exact,
     /// A constant which provides an upper bound on the exact trip count.
     ConstantMaximum,

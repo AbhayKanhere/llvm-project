@@ -1533,25 +1533,26 @@ define void @test-sext-sub(ptr %input, i32 %sub, i32 %numIterations) {
 ; CHECK-LABEL: 'test-sext-sub'
 ; CHECK-NEXT:  Classifying expressions for: @test-sext-sub
 ; CHECK-NEXT:    %i = phi i32 [ %nexti, %cont ], [ 0, %entry ]
-; CHECK-NEXT:    --> {0,+,1}<nuw><nsw><%loop> U: [0,-2147483648) S: [0,-2147483648) Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {0,+,1}<nuw><nsw><%loop> U: [0,-2147483648) S: [0,-2147483648) Exits: (-1 + %numIterations) LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %val = extractvalue { i32, i1 } %ssub, 0
-; CHECK-NEXT:    --> {(-1 * %sub),+,1}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 * %sub),+,1}<nw><%loop> U: full-set S: full-set Exits: (-1 + (-1 * %sub) + %numIterations) LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %ovfl = extractvalue { i32, i1 } %ssub, 1
 ; CHECK-NEXT:    --> %ovfl U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
 ; CHECK-NEXT:    %index64 = sext i32 %val to i64
-; CHECK-NEXT:    --> {(-1 * (sext i32 %sub to i64))<nsw>,+,1}<nsw><%loop> U: [-2147483647,6442450944) S: [-2147483647,6442450944) Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {(-1 * (sext i32 %sub to i64))<nsw>,+,1}<nsw><%loop> U: [-2147483647,6442450944) S: [-2147483647,6442450944) Exits: ((zext i32 (-1 + %numIterations) to i64) + (-1 * (sext i32 %sub to i64))<nsw>) LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %ptr = getelementptr inbounds float, ptr %input, i64 %index64
-; CHECK-NEXT:    --> {((-4 * (sext i32 %sub to i64))<nsw> + %input),+,4}<nw><%loop> U: full-set S: full-set Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {((-4 * (sext i32 %sub to i64))<nsw> + %input),+,4}<nw><%loop> U: full-set S: full-set Exits: ((4 * (zext i32 (-1 + %numIterations) to i64))<nuw><nsw> + (-4 * (sext i32 %sub to i64))<nsw> + %input) LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:    %nexti = add nsw i32 %i, 1
-; CHECK-NEXT:    --> {1,+,1}<nuw><%loop> U: [1,0) S: [1,0) Exits: <<Unknown>> LoopDispositions: { %loop: Computable }
+; CHECK-NEXT:    --> {1,+,1}<nuw><%loop> U: [1,0) S: [1,0) Exits: %numIterations LoopDispositions: { %loop: Computable }
 ; CHECK-NEXT:  Determining loop execution counts for: @test-sext-sub
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is (-1 + %numIterations)
 ; CHECK-NEXT:    exit count for loop: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    exit count for cont: (-1 + %numIterations)
 ; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 -1
 ; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (-1 + %numIterations)
 ; CHECK-NEXT:    symbolic max exit count for loop: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    symbolic max exit count for cont: (-1 + %numIterations)
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   br label %loop

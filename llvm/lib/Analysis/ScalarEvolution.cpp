@@ -9155,10 +9155,37 @@ ScalarEvolution::computeBackedgeTakenCount(const Loop *L,
     // CouldComputeBECount is true only if all exits can be computed.
     if (EL.ExactNotTaken != getCouldNotCompute())
       ++NumExitCountsComputed;
-    else
-      // We couldn't compute an exact value for this exit, so
-      // we won't be able to compute an exact value for the loop.
+    else {
+      // Drop the exit if it dominates the latch and every non-loop successor
+      // is a "pure trap": terminates at `unreachable` and uses no loop-defined
+      // values (so the IV cannot leak into observable trap-path side effects
+      // that downstream passes might reorder once BTC is known).
+      auto IsTrapTarget = [&L](const BasicBlock *BB) {
+        if (!isa<UnreachableInst>(BB->getTerminator()))
+          return false;
+        for (const Instruction &I : *BB)
+          for (const Value *Op : I.operands())
+            if (auto *OpI = dyn_cast<Instruction>(Op))
+              if (L->contains(OpI->getParent()))
+                return false;
+        return true;
+      };
+      bool TrapExit = false;
+      if (Latch && DT.dominates(ExitBB, Latch))
+        if (auto *BI = dyn_cast<CondBrInst>(ExitBB->getTerminator())) {
+          BasicBlock *S0 = BI->getSuccessor(0), *S1 = BI->getSuccessor(1);
+          bool S0Out = !L->contains(S0), S1Out = !L->contains(S1);
+          TrapExit = (S0Out || S1Out) &&
+                     (!S0Out || IsTrapTarget(S0)) &&
+                     (!S1Out || IsTrapTarget(S1));
+        }
+      if (TrapExit) {
+        ++NumExitCountsNotComputed;
+        continue;
+      }
+      // Real unanalyzable exit: BTC is no longer fully computable.
       CouldComputeBECount = false;
+    }
     // Remember exit count if either exact or symbolic is known. Because
     // Exact always implies symbolic, only check symbolic.
     if (EL.SymbolicMaxNotTaken != getCouldNotCompute())

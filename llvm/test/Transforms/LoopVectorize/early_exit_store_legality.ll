@@ -931,7 +931,7 @@ for.inc:
   br i1 %counted.cond, label %invalid.block, label %for.body
 
 invalid.block:
-  unreachable
+  ret void
 }
 
 define void @crash_conditional_load_for_uncountable_exit_argptr(ptr dereferenceable(40) noalias %store.area, ptr dereferenceable(4) %load.area, i1 %skip.cond) {
@@ -957,7 +957,7 @@ for.inc:
   br i1 %counted.cond, label %invalid.block, label %for.body
 
 invalid.block:
-  unreachable
+  ret void
 }
 
 

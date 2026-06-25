@@ -48,13 +48,14 @@ exit:
 define void @invariant_cond_trap(i32 %n, i32 %flag) mustprogress {
 ; CHECK-LABEL: 'invariant_cond_trap'
 ; CHECK-NEXT:  Determining loop execution counts for: @invariant_cond_trap
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 2147483647
 ; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   br label %loop
@@ -84,13 +85,14 @@ exit:
 define void @load_cond_trap(i32 %n, ptr %p) mustprogress {
 ; CHECK-LABEL: 'load_cond_trap'
 ; CHECK-NEXT:  Determining loop execution counts for: @load_cond_trap
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 2147483647
 ; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   br label %loop
@@ -215,7 +217,7 @@ exit:
 define void @mixed_analyzable_unanalyzable_traps(i32 %n, i32 %k, ptr %p) mustprogress {
 ; CHECK-LABEL: 'mixed_analyzable_unanalyzable_traps'
 ; CHECK-NEXT:  Determining loop execution counts for: @mixed_analyzable_unanalyzable_traps
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is ((0 smax %n) umin_seq (1 + (-1 smax %k)))
 ; CHECK-NEXT:    exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    exit count for mid: (1 + (-1 smax %k))
@@ -224,6 +226,7 @@ define void @mixed_analyzable_unanalyzable_traps(i32 %n, i32 %k, ptr %p) mustpro
 ; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:    symbolic max exit count for mid: (1 + (-1 smax %k))
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   br label %loop
@@ -263,13 +266,14 @@ exit:
 define void @no_mustprogress_load_trap(i32 %n, ptr %p) {
 ; CHECK-LABEL: 'no_mustprogress_load_trap'
 ; CHECK-NEXT:  Determining loop execution counts for: @no_mustprogress_load_trap
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 2147483647
 ; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   br label %loop
@@ -374,13 +378,14 @@ exit:
 define void @bare_unreachable_load_trap(i32 %n) mustprogress {
 ; CHECK-LABEL: 'bare_unreachable_load_trap'
 ; CHECK-NEXT:  Determining loop execution counts for: @bare_unreachable_load_trap
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 2147483647
 ; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   br label %loop
@@ -411,13 +416,14 @@ exit:
 define void @shared_pred_trap(i32 %n, i32 %guard) mustprogress {
 ; CHECK-LABEL: 'shared_pred_trap'
 ; CHECK-NEXT:  Determining loop execution counts for: @shared_pred_trap
-; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %loop: <multiple exits> backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 2147483647
 ; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %loop: Trip multiple is 1
 ;
 entry:
   %g = icmp eq i32 %guard, 0
@@ -448,7 +454,8 @@ exit:
   ret void
 }
 
-; (12) Trap exit doesn't dominate latch. computeExitLimit bails (CouldNotCompute);
+; (12) Trap exit does NOT dominate the latch -- the fix is gated on
+;      dominance, so BTC stays Unpredictable.
 define void @trap_not_dominating_latch(i32 %n, i32 %k, i32 %gate) mustprogress {
 ; CHECK-LABEL: 'trap_not_dominating_latch'
 ; CHECK-NEXT:  Determining loop execution counts for: @trap_not_dominating_latch
@@ -488,18 +495,20 @@ exit:
   ret void
 }
 
-; (13) Nested loops. trap.bb is outside both, so `inner.body` is an exit of
-;      BOTH inner and outer.
+; (13) Nested loops. inner.body dominates the inner latch (fix applies,
+;      inner BTC computable) but not the outer latch (outer BTC stays
+;      Unpredictable).
 define void @nested_inner_trap(i32 %m, i32 %n) mustprogress {
 ; CHECK-LABEL: 'nested_inner_trap'
 ; CHECK-NEXT:  Determining loop execution counts for: @nested_inner_trap
-; CHECK-NEXT:  Loop %inner: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:  Loop %inner: <multiple exits> backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    exit count for inner: (0 smax %n)
 ; CHECK-NEXT:    exit count for inner.body: ***COULDNOTCOMPUTE***
 ; CHECK-NEXT:  Loop %inner: constant max backedge-taken count is i32 2147483647
 ; CHECK-NEXT:  Loop %inner: symbolic max backedge-taken count is (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for inner: (0 smax %n)
 ; CHECK-NEXT:    symbolic max exit count for inner.body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %inner: Trip multiple is 1
 ; CHECK-NEXT:  Loop %outer: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT:    exit count for outer: (0 smax %m)
 ; CHECK-NEXT:    exit count for inner.body: ***COULDNOTCOMPUTE***
@@ -540,6 +549,45 @@ inner.cont:
 outer.latch:
   %oi.next = add nsw i32 %oi, 1
   br label %outer
+
+exit:
+  ret void
+}
+
+; (15) IV leaks into the trap block (store uses %i). Drop is gated on no
+;      loop-defined uses in the trap block, so BTC stays Unpredictable.
+define void @iv_leak_to_trap(i32 %n, ptr %sink) mustprogress {
+; CHECK-LABEL: 'iv_leak_to_trap'
+; CHECK-NEXT:  Determining loop execution counts for: @iv_leak_to_trap
+; CHECK-NEXT:  Loop %loop: <multiple exits> Unpredictable backedge-taken count.
+; CHECK-NEXT:    exit count for loop: (0 smax %n)
+; CHECK-NEXT:    exit count for body: ***COULDNOTCOMPUTE***
+; CHECK-NEXT:  Loop %loop: constant max backedge-taken count is i32 2147483647
+; CHECK-NEXT:  Loop %loop: symbolic max backedge-taken count is (0 smax %n)
+; CHECK-NEXT:    symbolic max exit count for loop: (0 smax %n)
+; CHECK-NEXT:    symbolic max exit count for body: ***COULDNOTCOMPUTE***
+;
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %cont ]
+  %cmp.exit = icmp slt i32 %i, %n
+  br i1 %cmp.exit, label %body, label %exit
+
+body:
+  %v = call i32 @opaque()
+  %cmp.t = icmp eq i32 %v, 0
+  br i1 %cmp.t, label %trap.bb, label %cont
+
+trap.bb:
+  store i32 %i, ptr %sink, align 4
+  call void @llvm.trap()
+  unreachable
+
+cont:
+  %i.next = add nsw i32 %i, 1
+  br label %loop
 
 exit:
   ret void
