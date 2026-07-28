@@ -122,6 +122,30 @@ static cl::opt<bool> LoopPredicationTraps(
     "indvars-predicate-loop-traps", cl::Hidden, cl::init(true),
     cl::desc("Predicate conditions that trap in loops with only local writes"));
 
+static cl::opt<bool> AllowReorderTraps(
+    "indvars-allow-reorder-traps", cl::Hidden, cl::init(false),
+    cl::desc("When the exact backedge-taken count is unknown only due to an "
+             "unanalyzable trap exit, predicate dominating trap exits using a "
+             "symbolic upper bound (may change which trap fires and when)"));
+
+static cl::opt<bool> LoopPredicationBypassStores(
+    "indvars-predicate-loop-bypass-stores", cl::Hidden, cl::init(false),
+    cl::desc("When predicating a trap exit, also bypass volatile/atomic stores "
+             "before the trap (assumes they are unobserved before it)"));
+
+static cl::opt<bool> LoopPredicationBypassMemSideEffects(
+    "indvars-predicate-loop-bypass-mem-sideeffects", cl::Hidden,
+    cl::init(false),
+    cl::desc("When predicating a trap exit, also bypass calls that only write "
+             "memory and are guaranteed to return (e.g. memset) before the "
+             "trap (assumes the writes are unobserved before it)"));
+
+static cl::opt<bool> LoopPredicationBypassNoReturn(
+    "indvars-predicate-loop-bypass-noreturn", cl::Hidden, cl::init(false),
+    cl::desc("Extends -indvars-predicate-loop-bypass-mem-sideeffects to also "
+             "bypass memory-writing calls that may not return; unsound in "
+             "general (the trap replaces leaving the loop through the call)"));
+
 static cl::opt<bool>
 AllowIVWidening("indvars-widen-indvars", cl::Hidden, cl::init(true),
                 cl::desc("Allow widening of indvars to eliminate s/zext"));
@@ -1862,27 +1886,40 @@ bool IndVarSimplify::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
   // through *explicit* control flow.  We have to eliminate the possibility of
   // implicit exits (see below) before we know it's truly exact.
   const SCEV *ExactBTC = SE->getBackedgeTakenCount(L);
-  if (isa<SCEVCouldNotCompute>(ExactBTC) || !Rewriter.isSafeToExpand(ExactBTC))
-    return false;
+  bool ExactBTCComputable =
+      !isa<SCEVCouldNotCompute>(ExactBTC) && Rewriter.isSafeToExpand(ExactBTC);
 
-  assert(SE->isLoopInvariant(ExactBTC, L) && "BTC must be loop invariant");
-  assert(ExactBTC->getType()->isIntegerTy() && "BTC must be integer");
-
-  auto BadExit = [&](BasicBlock *ExitingBB) {
+  // Classify an exiting block for predication:
+  //  - PredicatableTrap / PredicatableNormal: exit count computable; exit
+  //    leads to a no-effect trap / to ordinary code.
+  //  - SkippableTrap: exit count not computable, but exit leads to a no-effect
+  //    trap.  Can't be rewritten, but doesn't block the substitute-BTC path.
+  //  - Bad: anything else.  Blocks predication from here on.
+  enum class ExitClass {
+    PredicatableTrap,
+    PredicatableNormal,
+    SkippableTrap,
+    Bad
+  };
+  auto LeadsToNoEffectTrap = [&](BasicBlock *ExitBlock) {
+    return isa<UnreachableInst>(ExitBlock->getTerminator()) &&
+           crashingBBWithoutEffect(*ExitBlock);
+  };
+  auto ClassifyExit = [&](BasicBlock *ExitingBB) {
     // If our exiting block exits multiple loops, we can only rewrite the
     // innermost one.  Otherwise, we're changing how many times the innermost
     // loop runs before it exits.
     if (LI->getLoopFor(ExitingBB) != L)
-      return true;
+      return ExitClass::Bad;
 
     // Can't rewrite non-branch yet.
     CondBrInst *BI = dyn_cast<CondBrInst>(ExitingBB->getTerminator());
     if (!BI)
-      return true;
+      return ExitClass::Bad;
 
     // If already constant, nothing to do.
     if (isa<Constant>(BI->getCondition()))
-      return true;
+      return ExitClass::Bad;
 
     // If the exit block has phis, we need to be able to compute the values
     // within the loop which contains them.  This assumes trivially lcssa phis
@@ -1890,18 +1927,42 @@ bool IndVarSimplify::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
     BasicBlock *ExitBlock =
     BI->getSuccessor(L->contains(BI->getSuccessor(0)) ? 1 : 0);
     if (!ExitBlock->phis().empty())
-      return true;
+      return ExitClass::Bad;
 
     const SCEV *ExitCount = SE->getExitCount(L, ExitingBB);
     if (isa<SCEVCouldNotCompute>(ExitCount) ||
         !Rewriter.isSafeToExpand(ExitCount))
-      return true;
+      return LeadsToNoEffectTrap(ExitBlock) ? ExitClass::SkippableTrap
+                                            : ExitClass::Bad;
 
     assert(SE->isLoopInvariant(ExitCount, L) &&
            "Exit count must be loop invariant");
     assert(ExitCount->getType()->isIntegerTy() && "Exit count must be integer");
-    return false;
+    return LeadsToNoEffectTrap(ExitBlock) ? ExitClass::PredicatableTrap
+                                          : ExitClass::PredicatableNormal;
   };
+
+  // If the exact backedge-taken count isn't computable, we can still use a
+  // symbolic upper bound instead -- but only if every exit responsible for the
+  // count being unknown leads straight to a no-effect trap.  Such an exit only
+  // shortens the loop, so looking past it is safe.  An unanalyzable *normal*
+  // exit could instead fire earlier than the bound, so predicating another
+  // exit to fire first would change which exit is taken; that blocks this path.
+  if (!ExactBTCComputable) {
+    if (!LoopPredicationTraps || !AllowReorderTraps)
+      return false;
+    for (BasicBlock *ExitingBB : ExitingBlocks)
+      if (ClassifyExit(ExitingBB) == ExitClass::Bad)
+        return false;
+    const SCEV *SymbolicBTC = SE->getSymbolicMaxBackedgeTakenCount(L);
+    if (isa<SCEVCouldNotCompute>(SymbolicBTC) ||
+        !Rewriter.isSafeToExpand(SymbolicBTC))
+      return false;
+    ExactBTC = SymbolicBTC;
+  }
+
+  assert(SE->isLoopInvariant(ExactBTC, L) && "BTC must be loop invariant");
+  assert(ExactBTC->getType()->isIntegerTy() && "BTC must be integer");
 
   // Make sure all exits dominate the latch. This means there is a linear chain
   // of exits. We check this before sorting so we have a total order.
@@ -1935,13 +1996,25 @@ bool IndVarSimplify::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
     assert(DT->dominates(ExitingBlocks[i - 1], ExitingBlocks[i]) &&
            "Not sorted by dominance");
 
-  // Given our sorted total order, we know that exit[j] must be evaluated
-  // after all exit[i] such j > i.
-  for (unsigned i = 0, e = ExitingBlocks.size(); i < e; i++)
-    if (BadExit(ExitingBlocks[i])) {
-      ExitingBlocks.resize(i);
+  // Keep the leading run of predicatable exits, stopping at the first exit we
+  // can't rewrite (nothing dominated by it is safe to rewrite either).
+  //
+  // In substitute-BTC mode we only have an upper bound, so we may force only
+  // *trap* exits to fire early: that still aborts, so it can't turn an abort
+  // into a return, and since the kept exits are the leading run of traps, no
+  // earlier clean exit sits ahead of a rewritten trap.  A normal exit could be
+  // short-circuited ahead of a later unanalyzable trap, dropping it.
+  SmallVector<BasicBlock *, 16> PredicatableExits;
+  for (BasicBlock *ExitingBB : ExitingBlocks) {
+    ExitClass Class = ClassifyExit(ExitingBB);
+    bool CanPredicate = Class == ExitClass::PredicatableTrap ||
+                        (Class == ExitClass::PredicatableNormal &&
+                         ExactBTCComputable);
+    if (!CanPredicate)
       break;
-    }
+    PredicatableExits.push_back(ExitingBB);
+  }
+  ExitingBlocks = std::move(PredicatableExits);
 
   if (ExitingBlocks.empty())
     return false;
@@ -1966,11 +2039,22 @@ bool IndVarSimplify::predicateLoopExits(Loop *L, SCEVExpander &Rewriter) {
           // Simple stores cannot be observed by other threads.
           // If HasThreadLocalSideEffects is set, we check
           // crashingBBWithoutEffect to make sure that the crashing BB cannot
-          // observe them either.
-          if (!SI->isSimple())
+          // observe them either.  Non-simple (volatile/atomic) stores are
+          // bypassed only under an explicit opt-in.
+          if (!SI->isSimple() && !LoopPredicationBypassStores)
             return false;
         } else {
-          return false;
+          // A non-store side effect may be bypassed only if skipping it can't
+          // change whether the trap is reached: require a call that only writes
+          // memory, is nounwind, and returns.  -bypass-noreturn drops the
+          // willReturn requirement (unsound: trap replaces leaving via the
+          // call).
+          auto *CB = dyn_cast<CallBase>(&I);
+          bool MayNotReturnOK =
+              LoopPredicationBypassNoReturn || (CB && CB->willReturn());
+          if (!LoopPredicationBypassMemSideEffects || !CB ||
+              !CB->onlyWritesMemory() || !MayNotReturnOK || CB->mayThrow())
+            return false;
         }
       }
 
