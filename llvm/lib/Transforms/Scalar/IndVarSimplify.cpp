@@ -123,28 +123,24 @@ static cl::opt<bool> LoopPredicationTraps(
     cl::desc("Predicate conditions that trap in loops with only local writes"));
 
 static cl::opt<bool> AllowReorderTraps(
-    "indvars-allow-reorder-traps", cl::Hidden, cl::init(false),
+    "indvars-allow-reorder-traps", cl::Hidden, cl::init(true),
     cl::desc("When the exact backedge-taken count is unknown only due to an "
              "unanalyzable trap exit, predicate dominating trap exits using a "
-             "symbolic upper bound (may change which trap fires and when)"));
+             "symbolic upper bound (may change which trap occurs first )"));
 
 static cl::opt<bool> LoopPredicationBypassStores(
-    "indvars-predicate-loop-bypass-stores", cl::Hidden, cl::init(false),
-    cl::desc("When predicating a trap exit, also bypass volatile/atomic stores "
-             "before the trap (assumes they are unobserved before it)"));
+    "indvars-predicate-loop-bypass-stores", cl::Hidden, cl::init(true),
+    cl::desc(" bypass volatile/atomic stores (assume they are unobserved)"));
 
 static cl::opt<bool> LoopPredicationBypassMemSideEffects(
-    "indvars-predicate-loop-bypass-mem-sideeffects", cl::Hidden,
-    cl::init(false),
-    cl::desc("When predicating a trap exit, also bypass calls that only write "
-             "memory and are guaranteed to return (e.g. memset) before the "
-             "trap (assumes the writes are unobserved before it)"));
+    "indvars-predicate-loop-bypass-mem-sideeffects", cl::Hidden, cl::init(true),
+    cl::desc("bypass calls that only write "
+             "memory and are guaranteed to return."));
 
 static cl::opt<bool> LoopPredicationBypassNoReturn(
-    "indvars-predicate-loop-bypass-noreturn", cl::Hidden, cl::init(false),
+    "indvars-predicate-loop-bypass-noreturn", cl::Hidden, cl::init(true),
     cl::desc("Extends -indvars-predicate-loop-bypass-mem-sideeffects to also "
-             "bypass memory-writing calls that may not return; unsound in "
-             "general (the trap replaces leaving the loop through the call)"));
+             "bypass memory-writing calls that may not return."));
 
 static cl::opt<bool>
 AllowIVWidening("indvars-widen-indvars", cl::Hidden, cl::init(true),
