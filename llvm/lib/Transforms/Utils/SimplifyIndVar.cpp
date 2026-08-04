@@ -22,6 +22,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -46,6 +47,20 @@ STATISTIC(
 STATISTIC(NumElimCmp, "Number of IV comparisons eliminated");
 STATISTIC(NumInvariantCmp, "Number of IV comparisons made loop invariant");
 STATISTIC(NumSameSign, "Number of IV comparisons with new samesign flags");
+STATISTIC(NumNUWFromDominatingGuard,
+          "Number of nuw flags added to binops in IV recurrences from a "
+          "dominating overflow-checked guard");
+
+static cl::opt<bool> EnableNUWFromDominatingGuard(
+    "indvars-nuw-from-dominating-guard", cl::Hidden, cl::init(true),
+    cl::desc("Derive nuw on an IV recurrence from a dominating "
+             "overflow-checked guard that leads to a trap"));
+
+static cl::opt<unsigned> NUWFromDominatingGuardMaxOps(
+    "indvars-nuw-from-dominating-guard-max-ops", cl::Hidden, cl::init(8),
+    cl::desc("Max recurrence ops per loop that strengthenNUWFromDominatingGuard will "
+             "attempt to prove no-unsigned-wrap (compile-time budget); a wide "
+             "offset expression has many binops"));
 
 namespace {
   /// This is a utility for simplifying induction variables
@@ -63,6 +78,15 @@ namespace {
 
     bool Changed = false;
     bool RunUnswitching = false;
+
+    // Cached result of loopHasConditionalTrap().
+    std::optional<bool> HasConditionalTrap;
+    // Recurrence ops already proven no-unsigned-wrap from a dominating guard in this
+    // loop; bounded by NUWFromDominatingGuardMaxOps (compile-time budget).
+    unsigned NUWFromDominatingGuardOps = 0;
+    // Set when strengthenNUWFromDominatingGuard adds a flag; triggers one deferred
+    // SE->forgetLoop(L) after the user worklist completes.
+    bool NUWDominatingGuardAdded = false;
 
   public:
     SimplifyIndvar(Loop *Loop, ScalarEvolution *SE, DominatorTree *DT,
@@ -109,6 +133,11 @@ namespace {
     bool strengthenOverflowingOperation(BinaryOperator *OBO,
                                         Instruction *IVOperand);
     bool strengthenRightShift(BinaryOperator *BO, Instruction *IVOperand);
+    bool strengthenNUWFromDominatingGuard(BinaryOperator *BO);
+    // Cheap precondition (cached): does L contain a conditional branch whose
+    // one successor only traps? Gates strengthenNUWFromDominatingGuard so ordinary
+    // loops pay ~nothing.
+    bool loopHasConditionalTrap();
   };
 }
 
@@ -817,19 +846,161 @@ bool SimplifyIndvar::strengthenOverflowingOperation(BinaryOperator *BO,
   auto Flags = SE->getStrengthenedNoWrapFlagsFromBinOp(
       cast<OverflowingBinaryOperator>(BO));
 
-  if (!Flags)
+  bool Changed = false;
+  if (Flags) {
+    BO->setHasNoUnsignedWrap(
+        ScalarEvolution::maskFlags(*Flags, SCEV::FlagNUW) == SCEV::FlagNUW);
+    BO->setHasNoSignedWrap(ScalarEvolution::maskFlags(*Flags, SCEV::FlagNSW) ==
+                           SCEV::FlagNSW);
+    Changed = true;
+  }
+
+  if (!BO->hasNoUnsignedWrap() && strengthenNUWFromDominatingGuard(BO))
+    Changed = true;
+
+  return Changed;
+}
+
+/// A block whose only effect is to crash. Later we can relax this further,
+/// mirroring IndVarSimplify's crashingBBWithoutEffect.
+static bool isTrapOnlyBlock(const BasicBlock *BB) {
+  return llvm::all_of(*BB, [](const Instruction &I) {
+    if (const auto *CB = dyn_cast<CallBase>(&I))
+      return CB->onlyAccessesInaccessibleMemory();
+    return isa<UnreachableInst>(I);
+  });
+}
+
+bool SimplifyIndvar::loopHasConditionalTrap() {
+  if (HasConditionalTrap)
+    return *HasConditionalTrap;
+  if (L->getExitingBlock()) {
+    HasConditionalTrap = false;
+    return false;
+  }
+  // A trapping successor is an out-of-loop unreachable block, i.e. a loop exit.
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+  HasConditionalTrap = llvm::any_of(ExitBlocks, isTrapOnlyBlock);
+  return *HasConditionalTrap;
+}
+
+/// Try to prove that the recurrence computed by BO does not unsigned-wrap using
+/// a dominating overflow-checked guard, and set nuw if so.
+bool SimplifyIndvar::strengthenNUWFromDominatingGuard(BinaryOperator *BO) {
+  if (!EnableNUWFromDominatingGuard || BO->hasNoUnsignedWrap())
+    return false;
+  unsigned Opc = BO->getOpcode();
+
+  // Initially we only support Add, later we will support more binOps
+  if (Opc != Instruction::Add)
     return false;
 
-  BO->setHasNoUnsignedWrap(ScalarEvolution::maskFlags(*Flags, SCEV::FlagNUW) ==
-                           SCEV::FlagNUW);
-  BO->setHasNoSignedWrap(ScalarEvolution::maskFlags(*Flags, SCEV::FlagNSW) ==
-                         SCEV::FlagNSW);
+  const auto *AR = dyn_cast<SCEVAddRecExpr>(SE->getSCEV(BO));
+  if (!AR || AR->getLoop() != L || !AR->isAffine())
+    return false;
+  const auto *StepC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(*SE));
 
-  // The getStrengthenedNoWrapFlagsFromBinOp() check inferred additional nowrap
-  // flags on addrecs while performing zero/sign extensions. We could call
-  // forgetValue() here to make sure those flags also propagate to any other
-  // SCEV expressions based on the addrec. However, this can have pathological
-  // compile-time impact, see https://bugs.llvm.org/show_bug.cgi?id=50384.
+  if (!StepC || !StepC->getAPInt().isStrictlyPositive())
+    return false;
+
+  if (!loopHasConditionalTrap())
+    return false;
+
+  // Compile-time budget: bound how many recurrence ops we attempt per loop, as a
+  if (NUWFromDominatingGuardOps >= NUWFromDominatingGuardMaxOps)
+    return false;
+  ++NUWFromDominatingGuardOps;
+
+  // A conditional-trap loop is multi-exit, so it has no *exact* backedge-taken
+  // count; the symbolic max still bounds the recurrence's largest value.
+  const SCEV *BTC = SE->getSymbolicMaxBackedgeTakenCount(L);
+  if (isa<SCEVCouldNotCompute>(BTC))
+    return false;
+  Type *Ty = AR->getType();
+  if (BTC->getType() != Ty)
+    return false;
+
+  const SCEV *Start = AR->getStart();
+  const SCEV *Step = StepC;
+
+  // A context under the guard and dominating the body, so isKnownPredicateAt
+  // can walk the dominators up to the hoisted guard.
+  const Instruction *CtxI =
+      L->getLoopPreheader() ? L->getLoopPreheader()->getTerminator()
+                            : &*L->getHeader()->getFirstNonPHIIt();
+
+  // BTC (symbolic max) is only an UPPER bound (cf. LAA
+  // evaluatePtrAddRecAtMaxBTCWillNotWrap): (a) it is reached only if the primary
+  // IV does not unsigned-wrap, so require the IV's nuw (exactly start <u end &&
+  // step > 0); (b) it can be large, so the bound is computed in a wider type
+  // below.
+  PHINode *IV = L->getInductionVariable(*SE);
+  if (!IV)
+    return false;
+  const auto *IVAR = dyn_cast<SCEVAddRecExpr>(SE->getSCEV(IV));
+  if (!IVAR || IVAR->getLoop() != L || !IVAR->hasNoUnsignedWrap())
+    return false;
+
+  // Prove the recurrence's largest in-loop value does not unsigned-wrap. Values
+  // occur at i in [0, BTC]; we bound the "one-past" value at TripCount = BTC + 1,
+  // which is >= the true max (Step > 0) and equals the guard's whole-span
+  // endpoint base + TripCount*Step. Two sub-proofs:
+  //   G1: TripCount*Step does not wrap. Checked in a wider type so it cannot
+  //       itself wrap when BTC (an upper bound) is large.
+  //   G2: base + TripCount*Step >=u base. Checked in the narrow type to match
+  //       the guard's no-overflow fact; sound once G1 holds.
+  unsigned NarrowBits = Ty->getIntegerBitWidth();
+  Type *WideTy = Type::getIntNTy(Ty->getContext(), 2 * NarrowBits);
+  const SCEV *WUMax = SE->getConstant(APInt::getMaxValue(NarrowBits).zext(2 * NarrowBits));
+
+  // G1, in the wider type.
+  const SCEV *WTrip =
+      SE->getAddExpr(SE->getZeroExtendExpr(BTC, WideTy), SE->getOne(WideTy));
+  const SCEV *WStep = SE->getZeroExtendExpr(Step, WideTy);
+  const SCEV *WMul = SE->applyLoopGuards(SE->getMulExpr(WTrip, WStep), L);
+  bool MulFits = SE->isKnownPredicateAt(ICmpInst::ICMP_ULE, WMul, WUMax, CtxI);
+
+  // G2. Matches when Start is the base; the parent-derived witness below handles
+  // a Start one stride ahead of the base (e.g. off + stride).
+  const SCEV *TripCount = SE->getAddExpr(BTC, SE->getOne(Ty));
+  const SCEV *EndOnePast =
+      SE->getAddExpr(Start, SE->getMulExpr(TripCount, Step));
+  bool AddNoWrap =
+      SE->isKnownPredicateAt(ICmpInst::ICMP_UGE, EndOnePast, Start, CtxI);
+
+  // Parent-derived witness: op = add(X, C), X an affine AddRec of L (positive
+  // constant step), 0 <=u C <=u step. Then op's max <= X's one-past value, so
+  // proving X's one-past from the guard proves op -- no dependence on X's own
+  // nuw flag (so no SCEV invalidation is needed to sequence the chain).
+  if (!AddNoWrap && Opc == Instruction::Add) {
+    for (unsigned I = 0; I < 2 && !AddNoWrap; ++I) {
+      const auto *XAR = dyn_cast<SCEVAddRecExpr>(SE->getSCEV(BO->getOperand(I)));
+      const auto *CS =
+          dyn_cast<SCEVConstant>(SE->getSCEV(BO->getOperand(1 - I)));
+      if (!XAR || XAR->getLoop() != L || !XAR->isAffine() || !CS)
+        continue;
+      const auto *XStepC = dyn_cast<SCEVConstant>(XAR->getStepRecurrence(*SE));
+      if (!XStepC || !XStepC->getAPInt().isStrictlyPositive() ||
+          CS->getAPInt().ugt(XStepC->getAPInt()))
+        continue;
+      const SCEV *XOnePast =
+          SE->getAddExpr(XAR->getStart(), SE->getMulExpr(TripCount, XStepC));
+      AddNoWrap = SE->isKnownPredicateAt(ICmpInst::ICMP_UGE, XOnePast,
+                                         XAR->getStart(), CtxI);
+    }
+  }
+
+  if (!MulFits || !AddNoWrap)
+    return false;
+
+  BO->setHasNoUnsignedWrap();
+  ++NumNUWFromDominatingGuard;
+  // Defer SCEV invalidation: forgetLoop is O(loop), so do it once after the
+  // worklist rather than per op (dependent ops are proven from the guard
+  // directly, so need no refresh).
+  NUWDominatingGuardAdded = true;
+  LLVM_DEBUG(dbgs() << "INDVARS: added nuw from dominating guard: " << *BO << "\n");
   return true;
 }
 
@@ -1007,6 +1178,14 @@ void SimplifyIndvar::simplifyUsers(PHINode *CurrIV, IVVisitor *V) {
     if (isSimpleIVUser(UseInst, L, SE)) {
       pushIVUsers(UseInst, Simplified, SimpleIVUsers);
     }
+  }
+
+  // Deferred once-per-loop invalidation for nuw flags added from a dominating guard
+  // (see strengthenNUWFromDominatingGuard): the loop's cached backedge-taken count is
+  // stale, so the trap exit is re-analyzed and folded downstream.
+  if (NUWDominatingGuardAdded) {
+    SE->forgetLoop(L);
+    NUWDominatingGuardAdded = false;
   }
 }
 
