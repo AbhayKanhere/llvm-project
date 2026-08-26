@@ -13230,7 +13230,47 @@ bool ScalarEvolution::isKnownPredicateViaMaxValue(CmpPredicate Pred,
     return false;
   const SCEV *MaxVal = applyLoopGuards(getAddExpr(WStart, Prod), L);
   const SCEV *WRHS = applyLoopGuards(getNoopOrZeroExtend(RHS, WideTy), L);
-  return isKnownViaNonRecursiveReasoning(Pred, MaxVal, WRHS);
+  return isKnownViaNonRecursiveReasoning(Pred, MaxVal, WRHS) ||
+         isKnownPredicateViaFloorDiv(Pred, MaxVal, WRHS);
+}
+
+bool ScalarEvolution::isKnownPredicateViaFloorDiv(CmpPredicate Pred,
+                                                  SCEVUse LHS, SCEVUse RHS) {
+  // C*(X u/C) u<= X for any C > 0; a subtracted constant K needs
+  // C*(X u/C) >= K so the result cannot unsigned-underflow.
+  if (Pred != ICmpInst::ICMP_ULE && Pred != ICmpInst::ICMP_ULT)
+    return false;
+
+  // Split off an optional "- K": if LHS is (Core + Cn) with Cn a negative
+  // constant (Cn = -K), then LHS == Core - K; otherwise Core = LHS.
+  SCEVUse Core = LHS;
+  const APInt *NegOff = nullptr;
+  const SCEV *Rest;
+  if (match(LHS, m_scev_Add(m_scev_APInt(NegOff), m_SCEV(Rest))) &&
+      NegOff->isNegative())
+    Core = Rest;
+  else
+    NegOff = nullptr;
+
+  // Core == C*(X u/C) with C > 0.
+  const APInt *MulC, *DivC;
+  const SCEV *X;
+  if (!match(Core, m_scev_Mul(m_scev_APInt(MulC),
+                              m_scev_UDiv(m_SCEV(X), m_scev_APInt(DivC)))) ||
+      MulC->isZero() || *MulC != *DivC)
+    return false;
+
+  // C*(X u/C) u<= X, so if the guard gives X u<= RHS then Core u<= RHS.
+  if (!isKnownPredicate(ICmpInst::ICMP_ULE, X, RHS))
+    return false;
+
+  // Without an offset, Core u<= X; the strict form (<) is not guaranteed.
+  if (!NegOff)
+    return Pred == ICmpInst::ICMP_ULE;
+
+  // Core - K with K >= 1: if Core >= K then Core - K < Core <= X, so both
+  // ULE and ULT hold.
+  return isKnownPredicate(ICmpInst::ICMP_UGE, Core, getConstant(-*NegOff));
 }
 
 bool ScalarEvolution::isKnownViaNonRecursiveReasoning(CmpPredicate Pred,

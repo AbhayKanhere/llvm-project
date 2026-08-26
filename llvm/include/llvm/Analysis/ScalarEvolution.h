@@ -2268,6 +2268,10 @@ private:
   /// value at the maximum iteration count.
   bool isKnownPredicateViaMaxValue(CmpPredicate Pred, SCEVUse LHS, SCEVUse RHS);
 
+  /// Prove LHS Pred RHS via the floor-div identity C*(X u/C) [- K] u<= X
+  /// (C > 0; the subtracted constant K must not cause unsigned underflow).
+  bool isKnownPredicateViaFloorDiv(CmpPredicate Pred, SCEVUse LHS, SCEVUse RHS);
+
   /// Test whether the condition described by Pred, LHS, and RHS is true
   /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
   /// true.
