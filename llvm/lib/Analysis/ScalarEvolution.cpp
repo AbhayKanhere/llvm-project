@@ -13469,7 +13469,6 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   if (!PositiveStride) {
     const SCEV *GuardedStride = applyLoopGuards(Stride, L);
     if (isKnownPositive(GuardedStride)) {
-      Stride = GuardedStride;
       PositiveStride = true;
     }
   }
