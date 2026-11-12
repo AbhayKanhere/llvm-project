@@ -694,8 +694,9 @@ bool IndVarSimplify::simplifyAndExtend(Loop *L,
       // Information about sign/zero extensions of CurrIV.
       IndVarSimplifyVisitor Visitor(CurrIV, SE, TTI, DT);
 
-      const auto &[C, U] = simplifyUsersOfIV(CurrIV, SE, DT, LI, TTI, DeadInsts,
-                                             Rewriter, &Visitor);
+      const auto &[C, U] =
+          simplifyUsersOfIV(CurrIV, SE, DT, LI, TTI, DeadInsts, Rewriter,
+                            &Visitor, /*HoistInvariantCmps=*/true);
 
       Changed |= C;
       RunUnswitching |= U;
@@ -2204,7 +2205,10 @@ PreservedAnalyses IndVarSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
   auto PA = getLoopPassPreservedAnalyses();
   PA.preserveSet<CFGAnalyses>();
   if (IVS.runUnswitching()) {
-    AM.getResult<ShouldRunExtraSimpleLoopUnswitch>(L, AR);
+    // The new invariant conditions may also be invariant in parent loops.
+    // Requests for parent loops stay cached until their extra unswitch run.
+    for (Loop *UL = &L; UL; UL = UL->getParentLoop())
+      AM.getResult<ShouldRunExtraSimpleLoopUnswitch>(*UL, AR);
     PA.preserve<ShouldRunExtraSimpleLoopUnswitch>();
   }
 
